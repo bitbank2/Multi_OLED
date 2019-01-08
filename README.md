@@ -4,6 +4,8 @@ Copyright (c) 2019 BitBank Software, Inc.<br>
 Written by Larry Bank<br>
 bitbank@pobox.com<br>
 <br>
+![Multi_OLED](/demo.jpg?raw=true "Multi_OLED")
+<br>
 The purpose of this code is to easily control mulitple SH1106/SSD1306 OLED
 displays using a minimum of GPIO lines. The number of displays is not tied to
 the number of I2C buses if they have unique addresses. For example, if you
@@ -41,4 +43,7 @@ This code depends on the Multi_BitBang library. You can download it here:<br>
 https://github.com/bitbank2/Multi_BitBang
 <br>
 
+If you find this code useful, please consider buying me a cup of coffee
+
+[![paypal](https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=SR4F44J2UR8S4)
 
