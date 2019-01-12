@@ -25,11 +25,6 @@
 #include <Multi_BitBang.h>
 #include <Multi_OLED.h>
 
-//
-// Comment out this line to gain 1K of RAM and not use a backing buffer
-//
-//#define USE_BACKBUFFER
-
 // small (8x8) font
 const byte ucFont[]PROGMEM = {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x7e,0x81,0x95,0xb1,0xb1,0x95,0x81,0x7e,
   0x7e,0xff,0xeb,0xcf,0xcf,0xeb,0xff,0x7e,0x0e,0x1f,0x3f,0x7e,0x3f,0x1f,0x0e,0x00,
@@ -666,14 +661,18 @@ const byte ucSmallFont[]PROGMEM = {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x3e,0x45,
 #else
 #define MAX_DISPLAYS 16
 #endif
-
+// RAM size of each display
+#define BUFFER_SIZE 1024
 // some globals
-static int iScreenOffset; // current write offset of screen data
-#ifdef USE_BACKBUFFER
-static unsigned char ucScreen[1024]; // local copy of the image buffer
-#endif
+// If not running on an AVR, we can assume we have enough RAM to maintain
+// a backing buffer (1K) for each display
+#ifndef __AVR__
+static int iScreenOffset[MAX_DISPLAYS]; // current write offset of screen data
+static uint8_t ucScreen[MAX_DISPLAYS * BUFFER_SIZE]; // local copy of the image buffer
+#endif // !__AVR__
+
 static uint8_t oled_flips[MAX_DISPLAYS], oled_addrs[MAX_DISPLAYS], oled_types[MAX_DISPLAYS], oled_buses[MAX_DISPLAYS];
-static uint8_t iCurrentBus, iDisplayCount, oled_flip, oled_addr, oled_type;
+static uint8_t iCurrentDisplay, iCurrentBus, iDisplayCount, oled_flip, oled_addr, oled_type;
 static void Multi_OLEDWriteCommand(uint8_t c);
 //
 // Set the internal variables for the current display
@@ -683,6 +682,7 @@ static inline uint8_t SetDisplay(uint8_t iDisplay)
   if (iDisplay >= iDisplayCount)
      return 0;
 
+  iCurrentDisplay = iDisplay;
   iCurrentBus = oled_buses[iDisplay];
   oled_flip = oled_flips[iDisplay];
   oled_type = oled_types[iDisplay];
@@ -785,6 +785,10 @@ void Multi_OLEDSetContrast(uint8_t iDisplay, uint8_t ucContrast)
 //
 static void Multi_OLEDSetPosition(int x, int y)
 {
+#ifndef __AVR__
+  iScreenOffset[iCurrentDisplay] = (iCurrentDisplay * BUFFER_SIZE) + (y*128)+x;
+#endif
+
   if (oled_type == OLED_64x32) // visible display starts at column 32, row 4
   {
     x += 32; // display is centered in VRAM, so this is always true
@@ -798,7 +802,6 @@ static void Multi_OLEDSetPosition(int x, int y)
   Multi_OLEDWriteCommand(0xb0 | y); // go to page Y
   Multi_OLEDWriteCommand(0x00 | (x & 0xf)); // // lower col addr
   Multi_OLEDWriteCommand(0x10 | ((x >> 4) & 0xf)); // upper col addr
-  iScreenOffset = (y*128)+x;
 } /* Multi_OLEDSetPosition() */
 
 //
@@ -813,12 +816,13 @@ unsigned char ucTemp[129];
   memcpy(&ucTemp[1], ucBuf, iLen);
   Multi_I2CWrite(iCurrentBus, oled_addr, ucTemp, iLen+1);
   // Keep a copy in local buffer
-#ifdef USE_BACKBUFFER
-  memcpy(&ucScreen[iScreenOffset], ucBuf, iLen);
-  iScreenOffset += iLen;
+#ifndef __AVR__
+  memcpy(&ucScreen[iScreenOffset[iCurrentDisplay]], ucBuf, iLen);
+  iScreenOffset[iCurrentDisplay] += iLen;
 #endif
 } /* Multi_OLEDWriteDataBlock() */
 
+#ifndef __AVR__
 // Set (or clear) an individual pixel
 // The local copy of the frame buffer is used to avoid
 // reading data from the display controller
@@ -832,12 +836,7 @@ unsigned char uc, ucOld;
   i = ((y >> 3) * 128) + x;
   if (i < 0 || i > 1023) // off the screen
     return -1;
-#ifdef USE_BACKBUFFER
-  uc = ucOld = ucScreen[i];
-#else
-  uc = ucOld = 0;
-#endif
-
+  uc = ucOld = ucScreen[(iCurrentDisplay * BUFFER_SIZE) + i];
   uc &= ~(0x1 << (y & 7));
   if (ucColor)
   {
@@ -847,13 +846,10 @@ unsigned char uc, ucOld;
   {
     Multi_OLEDSetPosition(x, y>>3);
     Multi_OLEDWriteDataBlock(&uc, 1);
-#ifdef USE_BACKBUFFER
-    ucScreen[i] = uc;
-#endif
   }
   return 0;
 } /* Multi_OLEDSetPixel() */
-
+#endif // !__AVR__
 //
 // Invert font data
 //
@@ -1035,8 +1031,135 @@ unsigned char temp[16];
       Multi_OLEDWriteDataBlock(temp, 16); 
     } // for x
   } // for y
-#ifdef USE_BACKBUFFER
-   memset(ucScreen, ucData, 1024);
-#endif
 } /* oledFill() */
 
+#ifndef __AVR__
+//
+// Draw an arbitrary line from x1,y1 to x2,y2
+//
+void Multi_OLEDDrawLine(uint8_t iDisplay, int x1, int y1, int x2, int y2)
+{
+  int temp, i;
+  int dx = x2 - x1;
+  int dy = y2 - y1;
+  int error;
+  uint8_t *p, *pStart, mask, bOld, bNew;
+  int xinc, yinc;
+  int y, x;
+  
+  if (x1 < 0 || x2 < 0 || y1 < 0 || y2 < 0 || x1 > 127 || x2 > 127 || y1 > 63 || y2 > 63)
+     return;
+  if (!SetDisplay(iDisplay))
+     return;
+
+  if(abs(dx) > abs(dy)) {
+    // X major case
+    if(x2 < x1) {
+      dx = -dx;
+      temp = x1;
+      x1 = x2;
+      x2 = temp;
+      temp = y1;
+      y1 = y2;
+      y2 = temp;
+    }
+
+    y = y1;
+    dy = (y2 - y1);
+    error = dx >> 1;
+    yinc = 1;
+    if (dy < 0)
+    {
+      dy = -dy;
+      yinc = -1;
+    }
+    p = pStart = &ucScreen[(iCurrentDisplay * BUFFER_SIZE) + x1 + ((y >> 3) << 7)]; // point to current spot in back buffer
+    mask = 1 << (y & 7); // current bit offset
+    for(x=x1; x1 <= x2; x1++) {
+      *p++ |= mask; // set pixel and increment x pointer
+      error -= dy;
+      if (error < 0)
+      {
+        error += dx;
+        if (yinc > 0)
+           mask <<= 1;
+        else
+           mask >>= 1;
+        if (mask == 0) // we've moved outside the current row, write the data we changed
+        {
+           Multi_OLEDSetPosition(x, y>>3);
+           Multi_OLEDWriteDataBlock(pStart,  (int)(p-pStart)); // write the row we changed
+           x = x1+1; // we've already written the byte at x1
+           y1 = y+yinc;
+           p += (yinc > 0) ? 128 : -128;
+           pStart = p;
+           mask = 1 << (y1 & 7);
+        }
+        y += yinc;
+      }
+    } // for x1    
+   if (p != pStart) // some data needs to be written
+   {
+     Multi_OLEDSetPosition(x, y>>3);
+     Multi_OLEDWriteDataBlock(pStart, (int)(p-pStart));
+   }
+  }
+  else {
+    // Y major case
+    if(y1 > y2) {
+      dy = -dy;
+      temp = x1;
+      x1 = x2;
+      x2 = temp;
+      temp = y1;
+      y1 = y2;
+      y2 = temp;
+    } 
+
+    p = &ucScreen[(iCurrentDisplay * BUFFER_SIZE) + x1 + ((y1 >> 3) * 128)]; // point to current spot in back buffer
+    bOld = bNew = p[0]; // current data at that address
+    mask = 1 << (y1 & 7); // current bit offset
+    dx = (x2 - x1);
+    error = dy >> 1;
+    xinc = 1;
+    if (dx < 0)
+    {
+      dx = -dx;
+      xinc = -1;
+    }
+    for(x = x1; y1 <= y2; y1++) {
+      bNew |= mask; // set the pixel
+      error -= dx;
+      mask <<= 1; // y1++
+      if (mask == 0) // we're done with this byte, write it if necessary
+      {
+        if (bOld != bNew)
+        {
+          Multi_OLEDSetPosition(x, y1>>3);
+          Multi_OLEDWriteDataBlock(&bNew, 1);
+        }
+        p += 128; // next line
+        bOld = bNew = p[0];
+        mask = 1; // start at LSB again
+      }
+      if (error < 0)
+      {
+        error += dy;
+        if (bOld != bNew) // write the last byte we modified if it changed
+        {
+          Multi_OLEDSetPosition(x, y1>>3);
+          Multi_OLEDWriteDataBlock(&bNew, 1);         
+        }
+        p += xinc;
+        x += xinc;
+        bOld = bNew = p[0];
+      }
+    } // for y
+    if (bOld != bNew) // write the last byte we modified if it changed
+    {
+      Multi_OLEDSetPosition(x, y2>>3);
+      Multi_OLEDWriteDataBlock(&bNew, 1);        
+    }
+  } // y major case
+} /* Multi_OLEDDrawLine() */
+#endif // !__AVR__
