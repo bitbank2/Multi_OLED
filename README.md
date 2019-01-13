@@ -16,12 +16,17 @@ displays with 9 wires (8 I2C buses) if you have 8 set to address 0x3C and 8
 set to address 0x3D. The library addresses each display individually by bus
 and I2C address.<br>
 
+Here is a Youtube video of it in action on an nRF52840 Feather. The line draw function is very efficient, so even driving 2 displays over a bit-banged I2C bus, it can draw quite quickly.
+
+[![Line drawing video](https://img.youtube.com/vi/adc9y-w7V3g/0.jpg)](https://www.youtube.com/watch?v=adc9y-w7V3g)
+<br>
+
 Features:<br>
 ---------<br>
 - Supports 64x32, 128x32, 128x64 and 132x64 (SH1106) display sizes<br>
 - Includes 3 sizes of fixed fonts (6x8, 8x8, 16x32)<br>
 - Includes a function to load a Windows BMP file<br>
-- Optional backing RAM for drawing pixels for systems with enough RAM<br>
+- Optional backing RAM for drawing lines and pixels for systems with enough RAM<br>
 - Light enough to run on an ATtiny85<br> 
 <br>
 To initialize the library, you pass lists of the following:<br>
